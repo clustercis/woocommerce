@@ -74,6 +74,11 @@ class OrdersTableRefundDataStore extends OrdersTableDataStore {
 		// Delete the associated post, which in turn deletes order items, etc. through {@see WC_Post_Data}.
 		// Once we stop creating posts for orders, we should do the cleanup here instead.
 		wp_delete_post( $refund_id );
+
+		$data_synchronizer = wc_get_container()->get( DataSynchronizer::class );
+		if( ! $data_synchronizer->data_sync_is_enabled() ) {
+			$this->handle_order_deletion_with_sync_disabled( $refund_id );
+		}
 	}
 
 	/**

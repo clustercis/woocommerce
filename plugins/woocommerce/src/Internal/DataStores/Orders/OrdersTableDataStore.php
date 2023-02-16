@@ -955,6 +955,18 @@ WHERE
 		return $type[ $order_id ] ?? '';
 	}
 
+	public function order_exists( $order_id ) : bool {
+		global $wpdb;
+
+		$exists = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT EXISTS (SELECT id FROM {self::get_orders_table_name()} WHERE id=%d"),
+				$order_id
+		);
+
+		return (bool)$exists;
+	}
+
 	/**
 	 * Method to read an order from custom tables.
 	 *
@@ -1767,12 +1779,19 @@ FROM $order_meta_table
 
 			$order->set_id( 0 );
 
-			// Only delete post data if the posts table is authoritative and synchronization is enabled.
+			// Only delete post data if the orders table is authoritative and synchronization is enabled.
 			$data_synchronizer = wc_get_container()->get( DataSynchronizer::class );
-			if ( $data_synchronizer->data_sync_is_enabled() && $order->get_data_store()->get_current_class_name() === self::class ) {
-				// Delete the associated post, which in turn deletes order items, etc. through {@see WC_Post_Data}.
-				// Once we stop creating posts for orders, we should do the cleanup here instead.
-				wp_delete_post( $order_id );
+			$orders_table_is_authoritative = $order->get_data_store()->get_current_class_name() === self::class;
+
+			if ( $orders_table_is_authoritative ) {
+				if( $data_synchronizer->data_sync_is_enabled() ) {
+					// Delete the associated post, which in turn deletes order items, etc. through {@see WC_Post_Data}.
+					// Once we stop creating posts for orders, we should do the cleanup here instead.
+					wp_delete_post($order_id);
+				}
+				else {
+					$this->handle_order_deletion_with_sync_disabled($order_id);
+				}
 			}
 
 			do_action( 'woocommerce_delete_order', $order_id ); // phpcs:ignore WooCommerce.Commenting.CommentHooks.MissingHookComment
@@ -1790,6 +1809,21 @@ FROM $order_meta_table
 			$this->trash_order( $order );
 
 			do_action( 'woocommerce_trash_order', $order_id ); // phpcs:ignore WooCommerce.Commenting.CommentHooks.MissingHookComment
+		}
+	}
+
+	protected function handle_order_deletion_with_sync_disabled($order_id ) {
+		global $wpdb;
+
+		$post_type = $wpdb->get_var(
+			$wpdb->prepare("SELECT post_type FROM {$wpdb->posts} WHERE ID=%d", $order_id)
+		);
+
+		if(DataSynchronizer::PLACEHOLDER_ORDER_POST_TYPE === $post_type) {
+			$wpdb->delete($wpdb->posts, ['ID' => $order_id], ['%d']);
+		}
+		else {
+			$wpdb->insert(self::get_meta_table_name(), ['order_id' => $order_id, 'meta_key' => 'deleted_from', 'meta_value' => self::get_orders_table_name()]);
 		}
 	}
 
